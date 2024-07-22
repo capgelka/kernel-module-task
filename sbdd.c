@@ -20,67 +20,45 @@
 #include <linux/moduleparam.h>
 #include <linux/spinlock_types.h>
 
-#define SBDD_SECTOR_SHIFT      9
-#define SBDD_SECTOR_SIZE       (1 << SBDD_SECTOR_SHIFT)
-#define SBDD_MIB_SECTORS       (1 << (20 - SBDD_SECTOR_SHIFT))
 #define SBDD_NAME              "sbdd"
+#define SBDD_DST_MODE          (FMODE_WRITE | FMODE_READ)
 
 struct sbdd {
 	wait_queue_head_t       exitwait;
-	spinlock_t              datalock;
 	atomic_t                deleting;
 	atomic_t                refs_cnt;
 	sector_t                capacity;
-	u8                      *data;
 	struct gendisk          *gd;
 	struct request_queue    *q;
+	struct block_device     *dst_device;
 };
 
-static struct sbdd      __sbdd;
-static int              __sbdd_major = 0;
-static unsigned long    __sbdd_capacity_mib = 100;
+static struct sbdd      	__sbdd;
+static int              	__sbdd_major = 0;
+static char 				*__dst_device_path = NULL;
 
-static sector_t sbdd_xfer(struct bio_vec* bvec, sector_t pos, int dir)
+
+static int init_dst_device(struct block_device **dst_device, char *path)
 {
-	void *buff = kmap_atomic(bvec->bv_page) + bvec->bv_offset;
-	sector_t len = bvec->bv_len >> SBDD_SECTOR_SHIFT;
-	size_t offset;
-	size_t nbytes;
+	struct block_device *bdev;
+	int ret = 0;
 
-	if (pos + len > __sbdd.capacity)
-		len = __sbdd.capacity - pos;
-
-	offset = pos << SBDD_SECTOR_SHIFT;
-	nbytes = len << SBDD_SECTOR_SHIFT;
-
-	spin_lock(&__sbdd.datalock);
-
-	if (dir)
-		memcpy(__sbdd.data + offset, buff, nbytes);
-	else
-		memcpy(buff, __sbdd.data + offset, nbytes);
-
-	spin_unlock(&__sbdd.datalock);
-
-	pr_debug("pos=%6llu len=%4llu %s\n", pos, len, dir ? "written" : "read");
-
-	kunmap_atomic(buff);
-	return len;
+	pr_info("opening %s device\n", path);
+	bdev = blkdev_get_by_path(path, SBDD_DST_MODE, NULL);
+	if (IS_ERR(bdev)) {
+		ret = PTR_ERR(bdev);
+		pr_err("Failed to open block device %s: %d\n", path, ret);
+		return ret;
+	}
+	*dst_device = bdev;
+	pr_info("device %s has been openned succesfully\n", path);
+	return ret;
 }
 
-static void sbdd_xfer_bio(struct bio *bio)
-{
-	struct bvec_iter iter;
-	struct bio_vec bvec;
-	int dir = bio_data_dir(bio);
-	sector_t pos = bio->bi_iter.bi_sector;
-
-	bio_for_each_segment(bvec, bio, iter)
-		pos += sbdd_xfer(&bvec, pos, dir);
-}
 
 static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
+	blk_qc_t ret = BLK_STS_OK;
 	if (atomic_read(&__sbdd.deleting)) {
 		bio_io_error(bio);
 		return BLK_STS_IOERR;
@@ -91,13 +69,16 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 		return BLK_STS_IOERR;
 	}
 
-	sbdd_xfer_bio(bio);
-	bio_endio(bio);
+	bio_set_dev(bio, __sbdd.dst_device);
+	ret = submit_bio(bio);
+	if (ret != BLK_STS_OK && ret != BLK_QC_T_NONE) {
+		pr_warn("Bio redirection failed %d\n", ret);
+	}
 
 	if (atomic_dec_and_test(&__sbdd.refs_cnt))
 		wake_up(&__sbdd.exitwait);
 
-	return BLK_STS_OK;
+	return ret;
 }
 
 /*
@@ -124,16 +105,14 @@ static int sbdd_create(void)
 	}
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
-	__sbdd.capacity = (sector_t)__sbdd_capacity_mib * SBDD_MIB_SECTORS;
 
-	pr_info("allocating data\n");
-	__sbdd.data = vzalloc(__sbdd.capacity << SBDD_SECTOR_SHIFT);
-	if (!__sbdd.data) {
-		pr_err("unable to alloc data\n");
-		return -ENOMEM;
+	ret = init_dst_device(&__sbdd.dst_device, __dst_device_path);
+	if (ret) {
+		return ret;
 	}
 
-	spin_lock_init(&__sbdd.datalock);
+	__sbdd.capacity = get_capacity(__sbdd.dst_device->bd_disk);
+
 	init_waitqueue_head(&__sbdd.exitwait);
 
 	pr_info("allocating queue\n");
@@ -145,7 +124,7 @@ static int sbdd_create(void)
 	blk_queue_make_request(__sbdd.q, sbdd_make_request);
 
 	/* Configure queue */
-	blk_queue_logical_block_size(__sbdd.q, SBDD_SECTOR_SIZE);
+	blk_queue_logical_block_size(__sbdd.q,  bdev_logical_block_size(__sbdd.dst_device));
 
 	/* A disk must have at least one minor */
 	pr_info("allocating disk\n");
@@ -168,7 +147,6 @@ static int sbdd_create(void)
 	*/
 	pr_info("adding disk\n");
 	add_disk(__sbdd.gd);
-
 	return ret;
 }
 
@@ -192,10 +170,11 @@ static void sbdd_delete(void)
 	if (__sbdd.gd)
 		put_disk(__sbdd.gd);
 
-	if (__sbdd.data) {
-		pr_info("freeing data\n");
-		vfree(__sbdd.data);
+	if (__sbdd.dst_device) {
+		pr_info("releasing %s device\n", __dst_device_path);
+		blkdev_put(__sbdd.dst_device, SBDD_DST_MODE);
 	}
+
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
 
@@ -216,6 +195,7 @@ static int __init sbdd_init(void)
 	int ret = 0;
 
 	pr_info("starting initialization...\n");
+	pr_info("device to work with: %s\n", __dst_device_path);
 	ret = sbdd_create();
 
 	if (ret) {
@@ -246,8 +226,9 @@ module_init(sbdd_init);
 /* Called on module unloading. Unloading module is not allowed without it. */
 module_exit(sbdd_exit);
 
-/* Set desired capacity with insmod */
-module_param_named(capacity_mib, __sbdd_capacity_mib, ulong, S_IRUGO);
+/* Set desired proxy targer device with insmod */
+module_param_named(device, __dst_device_path, charp, S_IRUGO);
+MODULE_PARM_DESC(__dst_device_path, "Path to device file for bio redirection");
 
 /* Note for the kernel: a free license module. A warning will be outputted without it. */
 MODULE_LICENSE("GPL");
