@@ -39,6 +39,8 @@ struct sbdd {
 static struct sbdd      __sbdd;
 static int              __sbdd_major = 0;
 static unsigned long    __sbdd_capacity_mib = 100;
+static char* 			__dsc_device = NULL;
+
 
 static sector_t sbdd_xfer(struct bio_vec* bvec, sector_t pos, int dir)
 {
@@ -216,6 +218,7 @@ static int __init sbdd_init(void)
 	int ret = 0;
 
 	pr_info("starting initialization...\n");
+	pr_info("device to work with: %s\n", __dsc_device);
 	ret = sbdd_create();
 
 	if (ret) {
@@ -248,6 +251,9 @@ module_exit(sbdd_exit);
 
 /* Set desired capacity with insmod */
 module_param_named(capacity_mib, __sbdd_capacity_mib, ulong, S_IRUGO);
+
+module_param_named(device, __dsc_device, charp, S_IRUGO);
+MODULE_PARM_DESC(__dsc_device, "Path to device file for bio redicrection");
 
 /* Note for the kernel: a free license module. A warning will be outputted without it. */
 MODULE_LICENSE("GPL");

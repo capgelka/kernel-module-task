@@ -3,7 +3,7 @@
 set -e
 
 rmmod sbdd || echo "module isn't loaded, no need to remove"
-insmod sbdd.ko 
+insmod sbdd.ko $@
 
 mkfs.ext4 /dev/sbdd
 mkdir test_dir
