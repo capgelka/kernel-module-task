@@ -24,6 +24,7 @@
 #define SBDD_SECTOR_SIZE       (1 << SBDD_SECTOR_SHIFT)
 #define SBDD_MIB_SECTORS       (1 << (20 - SBDD_SECTOR_SHIFT))
 #define SBDD_NAME              "sbdd"
+#define SBDD_DST_MODE          (FMODE_WRITE | FMODE_READ)
 
 struct sbdd {
 	wait_queue_head_t       exitwait;
@@ -36,11 +37,37 @@ struct sbdd {
 	struct request_queue    *q;
 };
 
-static struct sbdd      __sbdd;
-static int              __sbdd_major = 0;
-static unsigned long    __sbdd_capacity_mib = 100;
-static char* 			__dsc_device = NULL;
+static struct sbdd      	__sbdd;
+static int              	__sbdd_major = 0;
+static unsigned long    	__sbdd_capacity_mib = 100;
+static char 				*__dst_device_path = NULL;
+static struct block_device  *__dst_device = NULL;
 
+
+static int init_dst_device(void)
+{
+	struct block_device *bdev;
+	int ret = 0;
+
+	pr_info("opening %s device\n", __dst_device_path);
+	bdev = blkdev_get_by_path(__dst_device_path, SBDD_DST_MODE, NULL);
+	if (IS_ERR(bdev)) {
+		ret = PTR_ERR(bdev);
+		pr_err("Failed to open block device %s: %d\n", __dst_device_path, ret);
+		return ret;
+	}
+	__dst_device = bdev;
+	pr_info("device %s has been openned succesfully\n", __dst_device_path);
+	return ret;
+}
+
+static void release_dst_device(void)
+{
+	if (likely(__dst_device != NULL)) {
+		blkdev_put(__dst_device, SBDD_DST_MODE);
+	}
+	pr_info("released %s device\n", __dst_device_path);
+}
 
 static sector_t sbdd_xfer(struct bio_vec* bvec, sector_t pos, int dir)
 {
@@ -125,6 +152,11 @@ static int sbdd_create(void)
 		return -EBUSY;
 	}
 
+	ret = init_dst_device();
+	if (ret) {
+		return ret;
+	}
+
 	memset(&__sbdd, 0, sizeof(struct sbdd));
 	__sbdd.capacity = (sector_t)__sbdd_capacity_mib * SBDD_MIB_SECTORS;
 
@@ -198,6 +230,7 @@ static void sbdd_delete(void)
 		pr_info("freeing data\n");
 		vfree(__sbdd.data);
 	}
+	release_dst_device();
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
 
@@ -218,7 +251,7 @@ static int __init sbdd_init(void)
 	int ret = 0;
 
 	pr_info("starting initialization...\n");
-	pr_info("device to work with: %s\n", __dsc_device);
+	pr_info("device to work with: %s\n", __dst_device_path);
 	ret = sbdd_create();
 
 	if (ret) {
@@ -252,8 +285,8 @@ module_exit(sbdd_exit);
 /* Set desired capacity with insmod */
 module_param_named(capacity_mib, __sbdd_capacity_mib, ulong, S_IRUGO);
 
-module_param_named(device, __dsc_device, charp, S_IRUGO);
-MODULE_PARM_DESC(__dsc_device, "Path to device file for bio redicrection");
+module_param_named(device, __dst_device_path, charp, S_IRUGO);
+MODULE_PARM_DESC(__dst_device_path, "Path to device file for bio redicrection");
 
 /* Note for the kernel: a free license module. A warning will be outputted without it. */
 MODULE_LICENSE("GPL");
