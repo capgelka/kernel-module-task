@@ -120,6 +120,17 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 		return BLK_STS_IOERR;
 	}
 
+	struct bio *new_bio;
+	printk("cloning bio\n");
+	__bio_clone_fast(new_bio, bio);
+	printk("cloned bio\n");
+	bio_set_dev(new_bio, __dst_device);
+	printk("device for bio is set\n");
+	submit_bio(bio);
+	printk("bio submitted\n");
+	bio_endio(new_bio);
+	printk("End io\n");
+
 	sbdd_xfer_bio(bio);
 	bio_endio(bio);
 
@@ -158,7 +169,8 @@ static int sbdd_create(void)
 	}
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
-	__sbdd.capacity = (sector_t)__sbdd_capacity_mib * SBDD_MIB_SECTORS;
+	//__sbdd.capacity = (sector_t)__sbdd_capacity_mib * SBDD_MIB_SECTORS;
+	__sbdd.capacity = get_capacity(__dst_device->bd_disk);
 
 	pr_info("allocating data\n");
 	__sbdd.data = vzalloc(__sbdd.capacity << SBDD_SECTOR_SHIFT);

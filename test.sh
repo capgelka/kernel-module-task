@@ -20,6 +20,7 @@ echo "OK" > test_dir/d1/d2/f
 
 cat test_dir/d1/d2/f
 umount test_dir
+rmmod sbdd
 
 mount $BLK_DEVICE test_dir
 cat test_dir/d1/d2/f
