@@ -42,6 +42,7 @@ static int              	__sbdd_major = 0;
 static unsigned long    	__sbdd_capacity_mib = 100;
 static char 				*__dst_device_path = NULL;
 static struct block_device  *__dst_device = NULL;
+static struct bio_set        __bio_set;
 
 
 static int init_dst_device(void)
@@ -110,6 +111,7 @@ static void sbdd_xfer_bio(struct bio *bio)
 
 static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
+	struct bio *new_bio;
 	if (atomic_read(&__sbdd.deleting)) {
 		bio_io_error(bio);
 		return BLK_STS_IOERR;
@@ -120,16 +122,15 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 		return BLK_STS_IOERR;
 	}
 
-	struct bio *new_bio;
-	printk("cloning bio\n");
-	__bio_clone_fast(new_bio, bio);
-	printk("cloned bio\n");
+	pr_info("cloning bio\n");
+	new_bio = bio_clone_fast(bio, GFP_KERNEL, &__bio_set);
+	pr_info("cloned bio\n");
 	bio_set_dev(new_bio, __dst_device);
-	printk("device for bio is set\n");
+	pr_info("device for bio is set\n");
 	submit_bio(bio);
-	printk("bio submitted\n");
+	pr_info("bio submitted\n");
 	bio_endio(new_bio);
-	printk("End io\n");
+	pr_info("End io\n");
 
 	sbdd_xfer_bio(bio);
 	bio_endio(bio);
@@ -164,6 +165,11 @@ static int sbdd_create(void)
 	}
 
 	ret = init_dst_device();
+	if (ret) {
+		return ret;
+	}
+
+	ret = bioset_init(&__bio_set, BIO_POOL_SIZE, 0, 0);
 	if (ret) {
 		return ret;
 	}
