@@ -112,6 +112,7 @@ static void sbdd_xfer_bio(struct bio *bio)
 static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct bio *new_bio;
+	blk_qc_t ret = BLK_STS_OK;
 	if (atomic_read(&__sbdd.deleting)) {
 		bio_io_error(bio);
 		return BLK_STS_IOERR;
@@ -123,22 +124,48 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 	}
 
 	pr_info("cloning bio\n");
+	pr_info("ANOTHER MSG\n\n");
 	new_bio = bio_clone_fast(bio, GFP_KERNEL, &__bio_set);
+	if (!new_bio) {
+		pr_err("failed to clone bio\n");
+		bio_io_error(bio);
+		if (atomic_dec_and_test(&__sbdd.refs_cnt)) {
+			wake_up(&__sbdd.exitwait);
+		}
+		return BLK_STS_IOERR;
+	}
 	pr_info("cloned bio\n");
 	bio_set_dev(new_bio, __dst_device);
 	pr_info("device for bio is set\n");
-	submit_bio(bio);
+	ret = submit_bio_wait(new_bio);
 	pr_info("bio submitted\n");
-	bio_endio(new_bio);
-	pr_info("End io\n");
+	if (ret != BLK_STS_OK) {
+		pr_warn("Bio redirection failed %d\n", ret);
+		goto cleanup;
+	}
 
-	sbdd_xfer_bio(bio);
+	// bio_endio(new_bio);
+	// pr_info("End io\n");
+
+	// sbdd_xfer_bio(bio);
+	// bio_endio(bio);
+
+cleanup:
+	
+	// sbdd_xfer_bio(bio);
+	// bio_endio(bio);
+
+	// if (ret != BLK_STS_OK) {
+    //     pr_info("Cleaning up new_bio\n");
+    //     bio_put(new_bio);
+    // }
+	bio_put(new_bio);
 	bio_endio(bio);
 
 	if (atomic_dec_and_test(&__sbdd.refs_cnt))
 		wake_up(&__sbdd.exitwait);
 
-	return BLK_STS_OK;
+	return ret;
 }
 
 /*
@@ -248,6 +275,9 @@ static void sbdd_delete(void)
 		pr_info("freeing data\n");
 		vfree(__sbdd.data);
 	}
+
+	//bioset_exit(&__bio_set);
+
 	release_dst_device();
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
