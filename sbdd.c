@@ -1,4 +1,4 @@
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+// SPDX-License-Identifier: GPL-2.0
 
 #include <linux/fs.h>
 #include <linux/mm.h>
@@ -33,9 +33,9 @@ struct sbdd {
 	struct block_device     *dst_device;
 };
 
-static struct sbdd      	__sbdd;
-static int              	__sbdd_major = 0;
-static char 				*__dst_device_path = NULL;
+static struct sbdd	__sbdd;
+static int		__sbdd_major;
+static char		*__dst_device_path;
 
 
 static int init_dst_device(struct block_device **dst_device, char *path)
@@ -59,6 +59,7 @@ static int init_dst_device(struct block_device **dst_device, char *path)
 static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
 	blk_qc_t ret = BLK_STS_OK;
+
 	if (atomic_read(&__sbdd.deleting)) {
 		bio_io_error(bio);
 		return BLK_STS_IOERR;
@@ -71,9 +72,8 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 
 	bio_set_dev(bio, __sbdd.dst_device);
 	ret = submit_bio(bio);
-	if (ret != BLK_STS_OK && ret != BLK_QC_T_NONE) {
+	if (ret != BLK_STS_OK && ret != BLK_QC_T_NONE)
 		pr_warn("Bio redirection failed %d\n", ret);
-	}
 
 	if (atomic_dec_and_test(&__sbdd.refs_cnt))
 		wake_up(&__sbdd.exitwait);
@@ -82,10 +82,10 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 }
 
 /*
-There are no read or write operations. These operations are performed by
-the request() function associated with the request queue of the disk.
-*/
-static struct block_device_operations const __sbdd_bdev_ops = {
+ * There are no read or write operations. These operations are performed by
+ * the request() function associated with the request queue of the disk.
+ */
+static const struct block_device_operations __sbdd_bdev_ops = {
 	.owner = THIS_MODULE,
 };
 
@@ -94,9 +94,9 @@ static int sbdd_create(void)
 	int ret = 0;
 
 	/*
-	This call is somewhat redundant, but used anyways by tradition.
-	The number is to be displayed in /proc/devices (0 for auto).
-	*/
+	 * This call is somewhat redundant, but used anyways by tradition.
+	 * The number is to be displayed in /proc/devices (0 for auto).
+	 */
 	pr_info("registering blkdev\n");
 	__sbdd_major = register_blkdev(0, SBDD_NAME);
 	if (__sbdd_major < 0) {
@@ -107,9 +107,8 @@ static int sbdd_create(void)
 	memset(&__sbdd, 0, sizeof(struct sbdd));
 
 	ret = init_dst_device(&__sbdd.dst_device, __dst_device_path);
-	if (ret) {
+	if (ret)
 		return ret;
-	}
 
 	__sbdd.capacity = get_capacity(__sbdd.dst_device->bd_disk);
 
@@ -124,7 +123,9 @@ static int sbdd_create(void)
 	blk_queue_make_request(__sbdd.q, sbdd_make_request);
 
 	/* Configure queue */
-	blk_queue_logical_block_size(__sbdd.q,  bdev_logical_block_size(__sbdd.dst_device));
+	blk_queue_logical_block_size(
+		__sbdd.q, bdev_logical_block_size(__sbdd.dst_device)
+	);
 
 	/* A disk must have at least one minor */
 	pr_info("allocating disk\n");
@@ -141,10 +142,10 @@ static int sbdd_create(void)
 	atomic_set(&__sbdd.refs_cnt, 1);
 
 	/*
-	Allocating gd does not make it available, add_disk() required.
-	After this call, gd methods can be called at any time. Should not be
-	called before the driver is fully initialized and ready to process reqs.
-	*/
+	 * Allocating gd does not make it available, add_disk() required.
+	 * After this call, gd methods can be called at any time. Should not be
+	 * called before the driver is fully initialized and ready to process reqs.
+	 */
 	pr_info("adding disk\n");
 	add_disk(__sbdd.gd);
 	return ret;
@@ -186,10 +187,10 @@ static void sbdd_delete(void)
 }
 
 /*
-Note __init is for the kernel to drop this function after
-initialization complete making its memory available for other uses.
-There is also __initdata note, same but used for variables.
-*/
+ * Note __init is for the kernel to drop this function after
+ * initialization complete making its memory available for other uses.
+ * There is also __initdata note, same but used for variables.
+ */
 static int __init sbdd_init(void)
 {
 	int ret = 0;
@@ -209,10 +210,10 @@ static int __init sbdd_init(void)
 }
 
 /*
-Note __exit is for the compiler to place this code in a special ELF section.
-Sometimes such functions are simply discarded (e.g. when module is built
-directly into the kernel). There is also __exitdata note.
-*/
+ * Note __exit is for the compiler to place this code in a special ELF section.
+ * Sometimes such functions are simply discarded (e.g. when module is built
+ * directly into the kernel). There is also __exitdata note.
+ */
 static void __exit sbdd_exit(void)
 {
 	pr_info("exiting...\n");
@@ -227,7 +228,7 @@ module_init(sbdd_init);
 module_exit(sbdd_exit);
 
 /* Set desired proxy targer device with insmod */
-module_param_named(device, __dst_device_path, charp, S_IRUGO);
+module_param_named(device, __dst_device_path, charp, 0444);
 MODULE_PARM_DESC(__dst_device_path, "Path to device file for bio redirection");
 
 /* Note for the kernel: a free license module. A warning will be outputted without it. */
