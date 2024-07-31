@@ -18,7 +18,6 @@ mount /dev/sbdd test_dir
 mkdir -p test_dir/d1/d2
 echo "OK" > test_dir/d1/d2/f
 
-cat test_dir/d1/d2/f
 umount test_dir
 rmmod sbdd
 
