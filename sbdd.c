@@ -33,9 +33,10 @@ struct sbdd {
 	struct block_device     *dst_device;
 };
 
-static struct sbdd	__sbdd;
-static int		__sbdd_major;
-static char		*__dst_device_path;
+static struct sbdd      __sbdd;
+static int              __sbdd_major;
+static char             *__dst_device_path;
+static struct bio_set    __bio_set;
 
 
 static int init_dst_device(struct block_device **dst_device, char *path)
@@ -59,6 +60,7 @@ static int init_dst_device(struct block_device **dst_device, char *path)
 static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
 	blk_qc_t ret = BLK_STS_OK;
+	struct bio *new_bio;
 
 	if (atomic_read(&__sbdd.deleting)) {
 		bio_io_error(bio);
@@ -70,7 +72,9 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 		return BLK_STS_IOERR;
 	}
 
-	bio_set_dev(bio, __sbdd.dst_device);
+	new_bio = bio_clone_fast(bio, GFP_KERNEL, &__bio_set);
+
+	bio_set_dev(new_bio, __sbdd.dst_device);
 	ret = submit_bio(bio);
 	if (ret != BLK_STS_OK && ret != BLK_QC_T_NONE)
 		pr_warn("Bio redirection failed %d\n", ret);
@@ -105,6 +109,10 @@ static int sbdd_create(void)
 	}
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
+
+	ret = bioset_init(&__bio_set, BIO_POOL_SIZE, 0, 0);
+	if (ret)
+		return ret;
 
 	ret = init_dst_device(&__sbdd.dst_device, __dst_device_path);
 	if (ret)
@@ -175,6 +183,9 @@ static void sbdd_delete(void)
 		pr_info("releasing %s device\n", __dst_device_path);
 		blkdev_put(__sbdd.dst_device, SBDD_DST_MODE);
 	}
+
+	
+	bioset_exit(&__bio_set);
 
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
