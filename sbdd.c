@@ -39,13 +39,14 @@ static char             *__dst_device_path;
 static struct bio_set    __bio_set;
 
 
-static void bio_custom_endio(struct bio *bio)
-{
-	pr_info("Original io finished: %p\n", bio);
-	bio_put(bio);
-	if (atomic_dec_and_test(&__sbdd.refs_cnt))
-		wake_up(&__sbdd.exitwait);
-}
+// static void bio_custom_endio(struct bio *bio)
+// {
+// 	pr_info("Original io finished: %p\n", bio);
+// 	bio_endio(bio);
+// 	bio_put(bio);
+// 	if (atomic_dec_and_test(&__sbdd.refs_cnt))
+// 		wake_up(&__sbdd.exitwait);
+// }
 
 
 static int init_dst_device(struct block_device **dst_device, char *path)
@@ -70,7 +71,7 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
 	blk_qc_t ret = BLK_STS_OK;
 	struct bio *new_bio;
-	pr_info("Original bio request: %p\n", bio);
+	pr_info("Original bio request: 0x%p\n", bio);
 	if (atomic_read(&__sbdd.deleting)) {
 		bio_io_error(bio);
 		return BLK_STS_IOERR;
@@ -86,12 +87,17 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 	bio_set_dev(new_bio, __sbdd.dst_device);
 	bio_chain(new_bio, bio);
 
-	bio->bi_end_io = bio_custom_endio;
-
+	//bio->bi_end_io = bio_custom_endio;
+	pr_info("Cloned bio request: 0x%p\n", new_bio);
 	ret = submit_bio(new_bio);
+	pr_info("Cloned bio request 0x%p has been submitted!\n", new_bio);
 	if (ret != BLK_STS_OK && ret != BLK_QC_T_NONE)
 		pr_warn("Bio redirection failed %d\n", ret);
 
+	if (atomic_dec_and_test(&__sbdd.refs_cnt))
+		wake_up(&__sbdd.exitwait);
+
+	pr_debug("end of make request\n");
 	return ret;
 }
 
