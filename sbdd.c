@@ -39,14 +39,30 @@ static char             *__dst_device_path;
 static struct bio_set    __bio_set;
 
 
-// static void bio_custom_endio(struct bio *bio)
-// {
-// 	pr_info("Original io finished: %p\n", bio);
-// 	bio_endio(bio);
-// 	bio_put(bio);
-// 	if (atomic_dec_and_test(&__sbdd.refs_cnt))
-// 		wake_up(&__sbdd.exitwait);
-// }
+static void bio_custom_endio2(struct bio *bio)
+{
+	pr_info("Original io finished: %p\n", bio);
+	bio->bi_end_io = bio->bi_private;
+	bio_endio(bio);
+	//bio_put(bio);
+	if (atomic_dec_and_test(&__sbdd.refs_cnt))
+		wake_up(&__sbdd.exitwait);
+}
+
+static void bio_custom_endio(struct bio *bio)
+{
+    struct bio *original_bio = bio->bi_private;
+
+    original_bio->bi_status = bio->bi_status;
+    
+    pr_info("Cloned io finished: %p\n", bio);
+    
+    bio_put(bio);
+    bio_endio(original_bio);
+    
+    // if (atomic_dec_and_test(&__sbdd.refs_cnt))
+    //     wake_up(&__sbdd.exitwait);
+}
 
 
 static int init_dst_device(struct block_device **dst_device, char *path)
@@ -71,7 +87,11 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
 	blk_qc_t ret = BLK_STS_OK;
 	struct bio *new_bio;
-	pr_info("Original bio request: 0x%p\n", bio);
+	pr_info(
+		"Original bio request [%s]: 0x%p\n",
+		bio_data_dir(bio) ? "WRITE" : "READ",
+	 	bio
+	 );
 	if (atomic_read(&__sbdd.deleting)) {
 		bio_io_error(bio);
 		return BLK_STS_IOERR;
@@ -85,17 +105,18 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 	new_bio = bio_clone_fast(bio, GFP_KERNEL, &__bio_set);
 
 	bio_set_dev(new_bio, __sbdd.dst_device);
-	bio_chain(new_bio, bio);
+	// bio_chain(new_bio, bio);
 
-	//bio->bi_end_io = bio_custom_endio;
-	pr_info("Cloned bio request: 0x%p\n", new_bio);
+	bio->bi_private = bio->bi_end_io;
+	bio->bi_end_io = bio_custom_endio2;
+
+	new_bio->bi_private = bio;
+	new_bio->bi_end_io = bio_custom_endio;
+	pr_info("Cloned bio request [0x%p]: 0x%p\n", bio, new_bio);
 	ret = submit_bio(new_bio);
 	pr_info("Cloned bio request 0x%p has been submitted!\n", new_bio);
 	if (ret != BLK_STS_OK && ret != BLK_QC_T_NONE)
 		pr_warn("Bio redirection failed %d\n", ret);
-
-	if (atomic_dec_and_test(&__sbdd.refs_cnt))
-		wake_up(&__sbdd.exitwait);
 
 	pr_debug("end of make request\n");
 	return ret;
