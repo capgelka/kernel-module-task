@@ -44,9 +44,23 @@ static void bio_custom_endio2(struct bio *bio)
 	pr_info("Original io finished: %p\n", bio);
 	bio->bi_end_io = bio->bi_private;
 	bio_endio(bio);
-	//bio_put(bio);
+
 	if (atomic_dec_and_test(&__sbdd.refs_cnt))
 		wake_up(&__sbdd.exitwait);
+}
+
+static void bio_custom_endio3(struct bio *bio)
+{
+	// BUG_ON(bio->bi_end_io != NULL);
+	//pr_info("Original io finished: %p\n", bio);
+	// bio->bi_end_io = NULL;
+	// bio_endio(bio);
+
+	// if (atomic_dec_and_test(&__sbdd.refs_cnt))
+	// 	wake_up(&__sbdd.exitwait);
+	//pr_info("Real end: %p\n", bio);
+	   // if (atomic_dec_and_test(&__sbdd.refs_cnt))
+       //  wake_up(&__sbdd.exitwait);
 }
 
 static void bio_custom_endio(struct bio *bio)
@@ -55,13 +69,14 @@ static void bio_custom_endio(struct bio *bio)
 
     original_bio->bi_status = bio->bi_status;
     
-    pr_info("Cloned io finished: %p\n", bio);
+    pr_debug("Cloned bio finished: 0x%p\n", bio);
     
     bio_put(bio);
     bio_endio(original_bio);
+    pr_info("Original bio finished: 0x%p\n", original_bio);
     
-    // if (atomic_dec_and_test(&__sbdd.refs_cnt))
-    //     wake_up(&__sbdd.exitwait);
+    if (atomic_dec_and_test(&__sbdd.refs_cnt))
+        wake_up(&__sbdd.exitwait);
 }
 
 
@@ -87,8 +102,8 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
 	blk_qc_t ret = BLK_STS_OK;
 	struct bio *new_bio;
-	pr_info(
-		"Original bio request [%s]: 0x%p\n",
+	pr_debug(
+		"Start handling original bio request [%s]: 0x%p\n",
 		bio_data_dir(bio) ? "WRITE" : "READ",
 	 	bio
 	 );
@@ -105,19 +120,24 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 	new_bio = bio_clone_fast(bio, GFP_KERNEL, &__bio_set);
 
 	bio_set_dev(new_bio, __sbdd.dst_device);
-	// bio_chain(new_bio, bio);
+	//bio_chain(new_bio, bio);
 
-	bio->bi_private = bio->bi_end_io;
-	bio->bi_end_io = bio_custom_endio2;
+	//bio->bi_private = bio->bi_end_io;
+	//bio->bi_end_io = bio_custom_endio3;
+	// bio_inc_remaining(bio);
 
 	new_bio->bi_private = bio;
 	new_bio->bi_end_io = bio_custom_endio;
-	pr_info("Cloned bio request [0x%p]: 0x%p\n", bio, new_bio);
+
 	ret = submit_bio(new_bio);
-	pr_info("Cloned bio request 0x%p has been submitted!\n", new_bio);
+	pr_debug(
+		"Cloned bio request 0x%p (for original bio 0x%p) has been submitted!\n",
+		new_bio,
+		bio
+	);
 	if (ret != BLK_STS_OK && ret != BLK_QC_T_NONE)
 		pr_warn("Bio redirection failed %d\n", ret);
-
+	//bio_endio(bio);
 	pr_debug("end of make request\n");
 	return ret;
 }
