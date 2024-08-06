@@ -36,47 +36,22 @@ struct sbdd {
 static struct sbdd      __sbdd;
 static int              __sbdd_major;
 static char             *__dst_device_path;
-static struct bio_set    __bio_set;
+static struct bio_set   __bio_set;
 
-
-static void bio_custom_endio2(struct bio *bio)
-{
-	pr_info("Original io finished: %p\n", bio);
-	bio->bi_end_io = bio->bi_private;
-	bio_endio(bio);
-
-	if (atomic_dec_and_test(&__sbdd.refs_cnt))
-		wake_up(&__sbdd.exitwait);
-}
-
-static void bio_custom_endio3(struct bio *bio)
-{
-	// BUG_ON(bio->bi_end_io != NULL);
-	//pr_info("Original io finished: %p\n", bio);
-	// bio->bi_end_io = NULL;
-	// bio_endio(bio);
-
-	// if (atomic_dec_and_test(&__sbdd.refs_cnt))
-	// 	wake_up(&__sbdd.exitwait);
-	//pr_info("Real end: %p\n", bio);
-	   // if (atomic_dec_and_test(&__sbdd.refs_cnt))
-       //  wake_up(&__sbdd.exitwait);
-}
 
 static void bio_custom_endio(struct bio *bio)
 {
-    struct bio *original_bio = bio->bi_private;
+	struct bio *original_bio = bio->bi_private;
 
-    original_bio->bi_status = bio->bi_status;
-    
-    pr_debug("Cloned bio finished: 0x%p\n", bio);
-    
-    bio_put(bio);
-    bio_endio(original_bio);
-    pr_info("Original bio finished: 0x%p\n", original_bio);
-    
-    if (atomic_dec_and_test(&__sbdd.refs_cnt))
-        wake_up(&__sbdd.exitwait);
+	pr_debug("Cloned bio finished: 0x%p\n", bio);
+	original_bio->bi_status = bio->bi_status;
+
+	bio_put(bio);
+	bio_endio(original_bio);
+	pr_info("Original bio finished: 0x%p\n", original_bio);
+
+	if (atomic_dec_and_test(&__sbdd.refs_cnt))
+		wake_up(&__sbdd.exitwait);
 }
 
 
@@ -93,7 +68,7 @@ static int init_dst_device(struct block_device **dst_device, char *path)
 		return ret;
 	}
 	*dst_device = bdev;
-	pr_info("device %s has been openned succesfully\n", path);
+	pr_info("device %s has been openned successfully\n", path);
 	return ret;
 }
 
@@ -102,10 +77,11 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 {
 	blk_qc_t ret = BLK_STS_OK;
 	struct bio *new_bio;
+
 	pr_debug(
 		"Start handling original bio request [%s]: 0x%p\n",
 		bio_data_dir(bio) ? "WRITE" : "READ",
-	 	bio
+		bio
 	 );
 	if (atomic_read(&__sbdd.deleting)) {
 		bio_io_error(bio);
@@ -117,14 +93,10 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 		return BLK_STS_IOERR;
 	}
 
+	bio->bi_end_io = bio_custom_endio3;
 	new_bio = bio_clone_fast(bio, GFP_KERNEL, &__bio_set);
 
 	bio_set_dev(new_bio, __sbdd.dst_device);
-	//bio_chain(new_bio, bio);
-
-	//bio->bi_private = bio->bi_end_io;
-	//bio->bi_end_io = bio_custom_endio3;
-	// bio_inc_remaining(bio);
 
 	new_bio->bi_private = bio;
 	new_bio->bi_end_io = bio_custom_endio;
@@ -137,7 +109,7 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 	);
 	if (ret != BLK_STS_OK && ret != BLK_QC_T_NONE)
 		pr_warn("Bio redirection failed %d\n", ret);
-	//bio_endio(bio);
+
 	pr_debug("end of make request\n");
 	return ret;
 }
@@ -208,8 +180,9 @@ static int sbdd_create(void)
 
 	/*
 	 * Allocating gd does not make it available, add_disk() required.
-	 * After this call, gd methods can be called at any time. Should not be
-	 * called before the driver is fully initialized and ready to process reqs.
+	 * After this call, gd methods can be called at any time.
+	 * Should not be called before the driver is fully initialized
+	 * and ready to process reqs.
 	 */
 	pr_info("adding disk\n");
 	add_disk(__sbdd.gd);
@@ -241,7 +214,7 @@ static void sbdd_delete(void)
 		blkdev_put(__sbdd.dst_device, SBDD_DST_MODE);
 	}
 
-	
+
 	bioset_exit(&__bio_set);
 
 
@@ -299,6 +272,8 @@ module_exit(sbdd_exit);
 module_param_named(device, __dst_device_path, charp, 0444);
 MODULE_PARM_DESC(__dst_device_path, "Path to device file for bio redirection");
 
-/* Note for the kernel: a free license module. A warning will be outputted without it. */
+/* Note for the kernel: a free license module.
+ * A warning will be outputted without it.
+ */
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Simple Block Device Driver");
